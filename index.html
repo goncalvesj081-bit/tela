@@ -26,6 +26,13 @@
   .st{font-size:14px;margin-top:10px}
   .ok{color:var(--ok)} .er{color:var(--er)}
   #qr{background:#fff;padding:8px;border-radius:8px;display:inline-block;min-height:16px}
+  select{font:inherit;padding:9px 10px;border-radius:8px;border:1px solid var(--bd);background:#0f1115;color:var(--tx)}
+  .cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-top:10px}
+  .cfg label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--mut)}
+  #info{position:absolute;left:10px;bottom:calc(env(safe-area-inset-bottom,0px) + 10px);max-width:calc(100% - 20px);
+    font:12px/1.4 ui-monospace,Consolas,monospace;color:#cfe6ff;background:rgba(0,0,0,.6);padding:6px 9px;
+    border-radius:8px;pointer-events:none;white-space:pre-wrap}
+  #info.rel{color:#ffb4b4}
   a.trocar{color:var(--mut);font-size:13px;cursor:pointer;text-decoration:underline}
 
   /* modo tablet */
@@ -64,6 +71,18 @@
     <div class="st" id="stPc">Parado.</div>
   </div>
   <div class="card">
+    <b>Qualidade</b>
+    <p style="margin:6px 0 0">Para indicadores, 15 fps já é suficiente e deixa cada quadro mais nítido. Mudanças valem na hora, mesmo transmitindo.</p>
+    <div class="cfg">
+      <label>Quadros por segundo
+        <select id="cFps"><option value="8">8 (bem leve)</option><option value="15">15 (recomendado)</option><option value="24">24</option><option value="30">30</option></select></label>
+      <label>Resolução máxima enviada
+        <select id="cRes"><option value="1280">1280 px (leve)</option><option value="1600">1600 px</option><option value="1920">1920 px (recomendado)</option><option value="2560">2560 px</option><option value="0">Original</option></select></label>
+      <label>Taxa de dados
+        <select id="cBr"><option value="3">3 Mbps (leve)</option><option value="6">6 Mbps</option><option value="8">8 Mbps (recomendado)</option><option value="12">12 Mbps (máximo)</option></select></label>
+    </div>
+  </div>
+  <div class="card">
     <b>Link para abrir no tablet</b>
     <p style="margin:6px 0 10px">Abra este link uma vez no Chrome do tablet (ou leia o QR code). Depois disso, basta abrir a página normal que ele conecta sozinho.</p>
     <div class="row"><input id="lnk" readonly><button class="sec" id="bCopy">Copiar</button></div>
@@ -81,7 +100,9 @@
 <div id="tablet" class="hidden">
   <video id="v" autoplay muted playsinline></video>
   <div id="msg">Conectando...</div>
+  <div id="info" class="hidden"></div>
   <div id="ctl">
+    <button id="bInfo">Info</button>
     <button id="bAjuste">Preencher</button>
     <button id="bFull">Tela cheia</button>
     <button id="bSair">Trocar modo</button>
@@ -98,6 +119,33 @@ const LS = {
   del: k => { try { localStorage.removeItem('tela3.' + k); } catch (e) {} }
 };
 const novaSala = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), b => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
+// Faz o WebRTC subir rápido para a taxa alvo e não cair para qualidade baixa (kbps)
+function sdpBitrate(sdp, kbps) {
+  const extra = 'x-google-min-bitrate=' + Math.round(kbps / 4) +
+    ';x-google-start-bitrate=' + Math.round(kbps * 0.6) + ';x-google-max-bitrate=' + kbps;
+  const L = sdp.split('\r\n'), out = [], cod = [], tem = {};
+  let v = false;
+  for (const l of L) {
+    if (l.startsWith('m=')) v = l.startsWith('m=video');
+    if (!v) continue;
+    let m = l.match(/^a=rtpmap:(\d+) (VP8|VP9|H264|AV1X?)\//i); if (m) cod.push(m[1]);
+    m = l.match(/^a=fmtp:(\d+) /); if (m) tem[m[1]] = true;
+  }
+  v = false;
+  for (const l of L) {
+    if (l.startsWith('m=')) v = l.startsWith('m=video');
+    if (v) {
+      const f = l.match(/^a=fmtp:(\d+) /);
+      if (f && cod.includes(f[1])) { out.push(l + ';' + extra); continue; }
+      out.push(l);
+      const r = l.match(/^a=rtpmap:(\d+) /);
+      if (r && cod.includes(r[1]) && !tem[r[1]]) out.push('a=fmtp:' + r[1] + ' ' + extra);
+      continue;
+    }
+    out.push(l);
+  }
+  return out.join('\r\n');
+}
 const idHost = sala => 'tela3-' + sala;
 const mostrar = alvo => ['inicio', 'pc', 'tablet'].forEach(i => $(i).classList.toggle('hidden', i !== alvo));
 
@@ -131,6 +179,37 @@ function iniciarPc() {
   let sala = LS.get('sala') || novaSala();
   LS.set('sala', sala);
   let stream = null, peer = null, calls = [];
+  const CFG = { fps: +(LS.get('fps') || 15), res: +(LS.get('res') || 1920), br: +(LS.get('br') || 8) };
+  $('cFps').value = CFG.fps; $('cRes').value = CFG.res; $('cBr').value = CFG.br;
+  if ($('cFps').value != CFG.fps) { CFG.fps = 15; $('cFps').value = 15; }
+  if ($('cRes').value != CFG.res) { CFG.res = 1920; $('cRes').value = 1920; }
+  if ($('cBr').value != CFG.br) { CFG.br = 8; $('cBr').value = 8; }
+
+  function aplicar(call) {
+    try {
+      call.peerConnection.getSenders().forEach(s => {
+        if (!s.track || s.track.kind !== 'video') return;
+        const p = s.getParameters();
+        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        const w = (s.track.getSettings && s.track.getSettings().width) || 0;
+        p.encodings[0].maxBitrate = CFG.br * 1e6;
+        p.encodings[0].maxFramerate = CFG.fps;
+        p.encodings[0].scaleResolutionDownBy = (CFG.res && w > CFG.res) ? w / CFG.res : 1;
+        p.degradationPreference = 'maintain-resolution';   // prefere perder fps a perder nitidez
+        s.setParameters(p).catch(() => {});
+      });
+    } catch (e) {}
+  }
+  function aplicarTodos() {
+    if (stream) {
+      const t = stream.getVideoTracks()[0];
+      if (t) t.applyConstraints({ frameRate: { ideal: CFG.fps, max: CFG.fps } }).catch(() => {});
+    }
+    calls.forEach(aplicar);
+  }
+  [['cFps', 'fps'], ['cRes', 'res'], ['cBr', 'br']].forEach(([id, k]) => {
+    $(id).onchange = () => { CFG[k] = +$(id).value; LS.set(k, CFG[k]); aplicarTodos(); };
+  });
 
   function link() { return location.origin + location.pathname + '?modo=tablet&sala=' + sala; }
   function atualizaLink() {
@@ -164,7 +243,7 @@ function iniciarPc() {
   $('bStart').onclick = async () => {
     try {
       stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 30, max: 30 } }, audio: false
+        video: { frameRate: { ideal: CFG.fps, max: CFG.fps }, cursor: 'always' }, audio: false
       });
     } catch (e) { st('Você cancelou ou o navegador bloqueou a captura.', 'er'); return; }
 
@@ -179,20 +258,10 @@ function iniciarPc() {
     });
     peer.on('connection', conn => {
       conn.on('open', () => {
-        const call = peer.call(conn.peer, stream);
+        const call = peer.call(conn.peer, stream, { sdpTransform: s => sdpBitrate(s, CFG.br * 1000) });
         calls.push(call);
-        setTimeout(() => {   // mais bitrate = texto mais nítido
-          try {
-            call.peerConnection.getSenders().forEach(s => {
-              if (s.track && s.track.kind === 'video') {
-                const p = s.getParameters();
-                if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-                p.encodings[0].maxBitrate = 6e6;
-                s.setParameters(p);
-              }
-            });
-          } catch (e) {}
-        }, 600);
+        setTimeout(() => aplicar(call), 600);
+        setTimeout(() => aplicar(call), 3000);
         st('Tablet conectado ✓', 'ok');
         const tira = () => { calls = calls.filter(c => c !== call); if (!calls.length) st('Transmitindo. Aguardando o tablet conectar...', 'ok'); };
         call.on('close', tira); conn.on('close', tira);
@@ -234,13 +303,22 @@ function iniciarTablet() {
     peer = new Peer();
     peer.on('open', procurar);
     peer.on('call', call => {
-      call.answer();
+      call.answer(undefined, { sdpTransform: s => sdpBitrate(s, 8000) });
       call.on('stream', s => {
         clearTimeout(timer);
         ao_vivo = true; v.srcObject = s; v.play().catch(() => {});
         msg.classList.add('hidden');
         travarTela();
         mostrarControles();
+        try {   // menor atraso no player
+          call.peerConnection.getReceivers().forEach(r => {
+            if (r.track && r.track.kind === 'video') {
+              try { r.jitterBufferTarget = 0; } catch (e) {}
+              try { r.playoutDelayHint = 0; } catch (e) {}
+            }
+          });
+        } catch (e) {}
+        iniciarInfo(call);
       });
       call.on('close', () => { ao_vivo = false; texto('Transmissão encerrada. Reconectando...'); agendar(); });
     });
@@ -276,6 +354,45 @@ function iniciarTablet() {
     else document.documentElement.requestFullscreen().catch(() => {});
   };
   mostrarControles();
+
+  // ----- diagnóstico: rota (local x internet), resolução, fps, taxa -----
+  const info = $('info'); let infoTimer = null, ultimo = null;
+  $('bInfo').onclick = () => {
+    const ligar = info.classList.contains('hidden');
+    info.classList.toggle('hidden', !ligar); LS.set('info', ligar ? '1' : '0');
+  };
+  if (LS.get('info') === '1') info.classList.remove('hidden');
+
+  function iniciarInfo(call) {
+    clearInterval(infoTimer); ultimo = null;
+    infoTimer = setInterval(async () => {
+      if (!ao_vivo || !call.peerConnection) return;
+      try {
+        const r = await call.peerConnection.getStats();
+        let sel = null, rtp = null;
+        r.forEach(s => {
+          if (s.type === 'transport' && s.selectedCandidatePairId) sel = r.get(s.selectedCandidatePairId);
+          if (s.type === 'inbound-rtp' && (s.kind === 'video' || s.mediaType === 'video')) rtp = s;
+        });
+        if (!sel) r.forEach(s => { if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded') sel = s; });
+        if (!rtp) return;
+        const loc = sel && r.get(sel.localCandidateId), rem = sel && r.get(sel.remoteCandidateId);
+        const tipos = [loc && loc.candidateType, rem && rem.candidateType];
+        const relay = tipos.includes('relay');
+        const agora = performance.now();
+        let mbps = '?';
+        if (ultimo) mbps = (((rtp.bytesReceived - ultimo.b) * 8) / ((agora - ultimo.t) / 1000) / 1e6).toFixed(1);
+        ultimo = { b: rtp.bytesReceived, t: agora };
+        info.className = relay ? 'rel' : '';
+        if (LS.get('info') !== '1') info.classList.add('hidden');
+        info.textContent =
+          'Rota: ' + (relay ? 'PASSANDO PELA INTERNET (relay) - lento' : 'direta na rede local') + ' [' + tipos.join('/') + ']\n' +
+          (rtp.frameWidth || '?') + 'x' + (rtp.frameHeight || '?') + ' | ' + Math.round(rtp.framesPerSecond || 0) + ' fps | ' + mbps + ' Mbps' +
+          (sel && sel.currentRoundTripTime != null ? ' | atraso ' + Math.round(sel.currentRoundTripTime * 1000) + ' ms' : '') +
+          ' | perdidos ' + (rtp.packetsLost || 0);
+      } catch (e) {}
+    }, 1500);
+  }
 }
 </script>
 </body>
