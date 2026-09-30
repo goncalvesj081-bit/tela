@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tela 3 · Segunda tela no tablet</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--bd:#2a2f3a;--tx:#e8eaf0;--mut:#98a0b3;--ac:#3b82f6;--ok:#22c55e;--er:#ef4444}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .hidden{display:none!important}
+  .wrap{max-width:760px;margin:0 auto;padding:28px 18px}
+  h1{font-size:22px;margin:0 0 6px}
+  p{color:var(--mut);line-height:1.5}
+  .card{background:var(--card);border:1px solid var(--bd);border-radius:14px;padding:18px;margin:14px 0}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  button{font:600 15px inherit;font-family:inherit;padding:12px 18px;border:0;border-radius:10px;
+    background:var(--ac);color:#fff;cursor:pointer}
+  button.sec{background:#2a2f3a}
+  button.big{font-size:18px;padding:16px 24px}
+  button.danger{background:#7a1f1f}
+  input{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--bd);
+    background:#0f1115;color:var(--tx);min-width:0;flex:1}
+  code{background:#0f1115;border:1px solid var(--bd);padding:2px 6px;border-radius:6px;word-break:break-all}
+  .st{font-size:14px;margin-top:10px}
+  .ok{color:var(--ok)} .er{color:var(--er)}
+  #qr{background:#fff;padding:8px;border-radius:8px;display:inline-block;min-height:16px}
+  a.trocar{color:var(--mut);font-size:13px;cursor:pointer;text-decoration:underline}
+
+  /* modo tablet */
+  #tablet{position:fixed;inset:0;background:#000}
+  #v{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+  #v.fill{object-fit:fill}
+  #msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    text-align:center;color:#9aa3b5;font-size:18px;padding:20px;pointer-events:none}
+  #ctl{position:absolute;top:calc(env(safe-area-inset-top,0px) + 10px);right:10px;display:flex;gap:8px;
+    transition:opacity .4s}
+  #ctl button{padding:9px 12px;font-size:14px;background:rgba(40,44,54,.85)}
+  #ctl.off{opacity:0;pointer-events:none}
+</style>
+</head>
+<body>
+
+<!-- ESCOLHA DO MODO -->
+<div id="inicio" class="wrap hidden">
+  <h1>Tela 3 · Segunda tela no tablet</h1>
+  <p>Escolha o que este aparelho vai fazer. A escolha fica salva, e da próxima vez ele já abre direto.</p>
+  <div class="card row">
+    <button class="big" id="bPc">💻 Este é o PC (transmitir)</button>
+    <button class="big sec" id="bTab">📱 Este é o tablet (assistir)</button>
+  </div>
+</div>
+
+<!-- MODO PC -->
+<div id="pc" class="wrap hidden">
+  <h1>💻 Transmitir uma tela do PC</h1>
+  <p>Clique em <b>Transmitir</b> e, na janela do Chrome, escolha a aba <b>Tela inteira</b> e a tela 3 (a virtual).</p>
+  <div class="card">
+    <div class="row">
+      <button class="big" id="bStart">▶ Transmitir uma tela</button>
+      <button class="big danger hidden" id="bStop">■ Parar</button>
+    </div>
+    <div class="st" id="stPc">Parado.</div>
+  </div>
+  <div class="card">
+    <b>Link para abrir no tablet</b>
+    <p style="margin:6px 0 10px">Abra este link uma vez no Chrome do tablet (ou leia o QR code). Depois disso, basta abrir a página normal que ele conecta sozinho.</p>
+    <div class="row"><input id="lnk" readonly><button class="sec" id="bCopy">Copiar</button></div>
+    <p style="margin:12px 0 6px">Sala: <code id="sala"></code></p>
+    <div class="row">
+      <div id="qr"></div>
+      <button class="sec" id="bNova">Gerar nova sala</button>
+    </div>
+    <p style="font-size:13px">Quem tiver o link consegue ver a tela transmitida. Gere uma nova sala se quiser invalidar o link antigo.</p>
+  </div>
+  <a class="trocar" id="trocaPc">trocar modo deste aparelho</a>
+</div>
+
+<!-- MODO TABLET -->
+<div id="tablet" class="hidden">
+  <video id="v" autoplay muted playsinline></video>
+  <div id="msg">Conectando...</div>
+  <div id="ctl">
+    <button id="bAjuste">Preencher</button>
+    <button id="bFull">Tela cheia</button>
+    <button id="bSair">Trocar modo</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const LS = {
+  get: k => { try { return localStorage.getItem('tela3.' + k); } catch (e) { return null; } },
+  set: (k, v) => { try { localStorage.setItem('tela3.' + k, v); } catch (e) {} },
+  del: k => { try { localStorage.removeItem('tela3.' + k); } catch (e) {} }
+};
+const novaSala = () => Array.from(crypto.getRandomValues(new Uint8Array(8)), b => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
+const idHost = sala => 'tela3-' + sala;
+const mostrar = alvo => ['inicio', 'pc', 'tablet'].forEach(i => $(i).classList.toggle('hidden', i !== alvo));
+
+// ---------- início ----------
+const params = new URLSearchParams(location.search);
+if (params.get('sala')) LS.set('sala', params.get('sala').replace(/[^a-z0-9]/gi, '').toLowerCase());
+if (params.get('modo')) LS.set('modo', params.get('modo'));
+if (params.get('sala') || params.get('modo')) history.replaceState(null, '', location.pathname); // limpa a URL
+
+function trocarModo() { LS.del('modo'); location.reload(); }
+$('trocaPc').onclick = trocarModo;
+$('bSair').onclick = trocarModo;
+$('bPc').onclick = () => { LS.set('modo', 'pc'); location.reload(); };
+$('bTab').onclick = () => {
+  if (!LS.get('sala')) {
+    const s = prompt('Digite o código da sala mostrado no PC (ou abra o link/QR do PC neste tablet):');
+    if (!s) return;
+    LS.set('sala', s.replace(/[^a-z0-9]/gi, '').toLowerCase());
+  }
+  LS.set('modo', 'tablet'); location.reload();
+};
+
+const modo = LS.get('modo');
+if (modo === 'pc') iniciarPc();
+else if (modo === 'tablet' && LS.get('sala')) iniciarTablet();
+else mostrar('inicio');
+
+// ---------- PC: transmitir ----------
+function iniciarPc() {
+  mostrar('pc');
+  let sala = LS.get('sala') || novaSala();
+  LS.set('sala', sala);
+  let stream = null, peer = null, calls = [];
+
+  function link() { return location.origin + location.pathname + '?modo=tablet&sala=' + sala; }
+  function atualizaLink() {
+    $('sala').textContent = sala;
+    $('lnk').value = link();
+    $('qr').innerHTML = '';
+    if (window.QRCode) new QRCode($('qr'), { text: link(), width: 168, height: 168 });
+  }
+  atualizaLink();
+  const st = (t, c) => { $('stPc').textContent = t; $('stPc').className = 'st ' + (c || ''); };
+
+  $('bCopy').onclick = async () => {
+    try { await navigator.clipboard.writeText(link()); $('bCopy').textContent = 'Copiado ✓'; }
+    catch (e) { $('lnk').select(); document.execCommand('copy'); }
+    setTimeout(() => $('bCopy').textContent = 'Copiar', 1500);
+  };
+  $('bNova').onclick = () => {
+    if (stream && !confirm('Isso desconecta o tablet atual. Continuar?')) return;
+    parar(); sala = novaSala(); LS.set('sala', sala); atualizaLink();
+  };
+
+  function parar() {
+    calls.forEach(c => { try { c.close(); } catch (e) {} }); calls = [];
+    if (peer) { try { peer.destroy(); } catch (e) {} peer = null; }
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    $('bStart').classList.remove('hidden'); $('bStop').classList.add('hidden');
+    st('Parado.');
+  }
+  $('bStop').onclick = parar;
+
+  $('bStart').onclick = async () => {
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30, max: 30 } }, audio: false
+      });
+    } catch (e) { st('Você cancelou ou o navegador bloqueou a captura.', 'er'); return; }
+
+    const vt = stream.getVideoTracks()[0];
+    try { vt.contentHint = 'detail'; } catch (e) {}   // prioriza nitidez de texto/indicadores
+    vt.onended = parar;                               // botão "Parar compartilhamento" do Chrome
+
+    peer = new Peer(idHost(sala));
+    peer.on('open', () => {
+      $('bStart').classList.add('hidden'); $('bStop').classList.remove('hidden');
+      st('Transmitindo. Aguardando o tablet conectar...', 'ok');
+    });
+    peer.on('connection', conn => {
+      conn.on('open', () => {
+        const call = peer.call(conn.peer, stream);
+        calls.push(call);
+        setTimeout(() => {   // mais bitrate = texto mais nítido
+          try {
+            call.peerConnection.getSenders().forEach(s => {
+              if (s.track && s.track.kind === 'video') {
+                const p = s.getParameters();
+                if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+                p.encodings[0].maxBitrate = 6e6;
+                s.setParameters(p);
+              }
+            });
+          } catch (e) {}
+        }, 600);
+        st('Tablet conectado ✓', 'ok');
+        const tira = () => { calls = calls.filter(c => c !== call); if (!calls.length) st('Transmitindo. Aguardando o tablet conectar...', 'ok'); };
+        call.on('close', tira); conn.on('close', tira);
+      });
+    });
+    peer.on('error', e => {
+      if (e.type === 'unavailable-id') { st('Essa sala já está em uso (outra aba do PC?). Feche a outra aba ou gere uma nova sala.', 'er'); parar(); }
+      else st('Erro de conexão: ' + e.type, 'er');
+    });
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  };
+}
+
+// ---------- TABLET: assistir ----------
+function iniciarTablet() {
+  mostrar('tablet');
+  const sala = LS.get('sala'), alvo = idHost(sala);
+  const v = $('v'), msg = $('msg');
+  let peer = null, timer = null, ao_vivo = false, wake = null, ocultar = null;
+
+  const texto = t => { msg.textContent = t; msg.classList.remove('hidden'); };
+
+  function agendar(ms) { clearTimeout(timer); timer = setTimeout(procurar, ms || 3000); }
+
+  function procurar() {
+    if (!peer || peer.destroyed || !peer.open) return;
+    ao_vivo = false;
+    texto('Procurando o PC... (abra o modo PC e clique em Transmitir)');
+    const conn = peer.connect(alvo, { reliable: true });
+    let abriu = false;
+    conn.on('open', () => { abriu = true; texto('Conectado. Aguardando o vídeo...'); });
+    conn.on('close', () => { if (!ao_vivo || abriu) { ao_vivo = false; texto('Transmissão encerrada. Reconectando...'); agendar(); } });
+    conn.on('error', () => agendar());
+    clearTimeout(timer);
+    timer = setTimeout(() => { if (!abriu) { try { conn.close(); } catch (e) {} procurar(); } }, 7000);
+  }
+
+  function criarPeer() {
+    peer = new Peer();
+    peer.on('open', procurar);
+    peer.on('call', call => {
+      call.answer();
+      call.on('stream', s => {
+        clearTimeout(timer);
+        ao_vivo = true; v.srcObject = s; v.play().catch(() => {});
+        msg.classList.add('hidden');
+        travarTela();
+        mostrarControles();
+      });
+      call.on('close', () => { ao_vivo = false; texto('Transmissão encerrada. Reconectando...'); agendar(); });
+    });
+    peer.on('error', e => {
+      if (e.type === 'peer-unavailable') { texto('PC não encontrado. Tentando de novo...'); agendar(); }
+      else if (e.type === 'network' || e.type === 'server-error' || e.type === 'socket-error') {
+        texto('Sem conexão com o servidor de pareamento. Tentando de novo...');
+        try { peer.destroy(); } catch (x) {} setTimeout(criarPeer, 4000);
+      } else texto('Erro: ' + e.type);
+    });
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  }
+  criarPeer();
+
+  // tela sempre ligada (indicadores)
+  async function travarTela() {
+    try { if ('wakeLock' in navigator && !wake) { wake = await navigator.wakeLock.request('screen'); wake.onrelease = () => wake = null; } } catch (e) {}
+  }
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && ao_vivo) travarTela(); });
+
+  // controles somem sozinhos; toque na tela os traz de volta
+  function mostrarControles() {
+    $('ctl').classList.remove('off'); clearTimeout(ocultar);
+    ocultar = setTimeout(() => $('ctl').classList.add('off'), 4000);
+  }
+  $('tablet').addEventListener('pointerdown', mostrarControles);
+  $('bAjuste').onclick = () => {
+    v.classList.toggle('fill');
+    $('bAjuste').textContent = v.classList.contains('fill') ? 'Ajustar' : 'Preencher';
+  };
+  $('bFull').onclick = () => {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  };
+  mostrarControles();
+}
+</script>
+</body>
+</html>
